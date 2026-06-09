@@ -12,25 +12,24 @@ const pool = new pg.Pool({
   ssl: { rejectUnauthorized: false },
 });
 
-// -------------------- STARTUP (FIXED) --------------------
+// -------------------- START --------------------
 
 async function start() {
-  try {
-    await initDB(pool);
-    console.log("DB initialized");
-
-    app.listen(process.env.PORT || 3000, () => {
-      console.log("Server running");
-    });
-  } catch (e) {
-    console.error("Startup error:", e);
-    process.exit(1);
-  }
+  await initDB(pool);
+  app.listen(process.env.PORT || 3000, () => console.log("Server running"));
 }
 
 start();
 
 // -------------------- HELPERS --------------------
+
+function toBool(v) {
+  if (v === true || v === false) return v;
+  if (!v) return false;
+
+  const s = v.toString().toLowerCase();
+  return s === "yes" || s === "true" || s === "sí" || s === "si";
+}
 
 async function getCourse(name) {
   if (!name) return null;
@@ -64,12 +63,28 @@ async function getSlot(time) {
   return ins.rows[0].id;
 }
 
+async function getSession(courseId, slotId, day) {
+  let r = await pool.query(
+    `SELECT id FROM clu_sessions 
+     WHERE course_id=$1 AND slot_id=$2 AND day=$3`,
+    [courseId, slotId, day],
+  );
+
+  if (r.rows.length) return r.rows[0].id;
+
+  let ins = await pool.query(
+    `INSERT INTO clu_sessions(course_id,slot_id,day,capacity)
+     VALUES($1,$2,$3,$4)
+     RETURNING id`,
+    [courseId, slotId, day, 20],
+  );
+
+  return ins.rows[0].id;
+}
+
 async function getStudent(row) {
   const email = row["MAIL"];
-
-  if (!email) {
-    throw new Error("Missing MAIL field");
-  }
+  if (!email) throw new Error("Missing MAIL");
 
   let r = await pool.query("SELECT id FROM clu_students WHERE email=$1", [
     email,
@@ -78,8 +93,7 @@ async function getStudent(row) {
   if (r.rows.length) return r.rows[0].id;
 
   let ins = await pool.query(
-    `
-    INSERT INTO clu_students(
+    `INSERT INTO clu_students(
       full_name,email,phone,mobile,birth_date,
       emergency_contact,emergency_phone,
       pickup_authorized,go_home_alone,
@@ -87,8 +101,7 @@ async function getStudent(row) {
       allergies,diet
     )
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-    RETURNING id
-    `,
+    RETURNING id`,
     [
       row["APELLIDOS Y NOMBRE"] || null,
       email,
@@ -98,11 +111,11 @@ async function getStudent(row) {
       row["CONTACTOS EMERGENCIAS"] || null,
       row["TEL CONTACTOS EMERGENCIAS"] || null,
       row["AUTORIZADOS RECOGIDA"] || null,
-      row["¿AUTORIZADO IRSE A CASA SOLO?"] || false,
-      row["¿AUTORIZA VIDEO?"] || false,
-      row["¿CONTRATA SEGURO ESCOLAR?"] || false,
-      row["¿TIENE HERMANOS?"] || false,
-      row["¿PERTENECE AL AMPA?"] || false,
+      toBool(row["¿AUTORIZADO IRSE A CASA SOLO?"]),
+      toBool(row["¿AUTORIZA VIDEO?"]),
+      toBool(row["¿CONTRATA SEGURO ESCOLAR?"]),
+      toBool(row["¿TIENE HERMANOS?"]),
+      toBool(row["¿PERTENECE AL AMPA?"]),
       row["¿ALERGICO A ALGO?/¿PADECE ALGUNA ENFERMEDAD IMPORTANTE?"] || null,
       row["¿SIGUE ALGUN REGIMEN DE COMIDAS?"] || null,
     ],
@@ -111,43 +124,25 @@ async function getStudent(row) {
   return ins.rows[0].id;
 }
 
-// -------------------- IMPORT ENDPOINT --------------------
+// -------------------- IMPORT --------------------
 
 app.post("/import", async (req, res) => {
-  const row = req.body;
-
   try {
+    const row = req.body;
+
+    const course = row["ACTIVIDAD"];
+    const time = row["HORARIO"];
+    const day = row.day || "unknown";
+
+    const courseId = await getCourse(course);
+    const slotId = await getSlot(time);
+
+    const sessionId = await getSession(courseId, slotId, day);
+
     const studentId = await getStudent(row);
-    const courseId = await getCourse(row["ACTIVIDAD"]);
-    const slotId = await getSlot(row["HORARIO"]);
 
-    // session
-    let sessionRes = await pool.query(
-      `SELECT id FROM clu_sessions WHERE course_id=$1 AND slot_id=$2`,
-      [courseId, slotId],
-    );
-
-    let sessionId;
-
-    if (sessionRes.rows.length) {
-      sessionId = sessionRes.rows[0].id;
-    } else {
-      let ins = await pool.query(
-        `
-        INSERT INTO clu_sessions(course_id,slot_id,capacity)
-        VALUES($1,$2,$3)
-        RETURNING id
-        `,
-        [courseId, slotId, 20],
-      );
-
-      sessionId = ins.rows[0].id;
-    }
-
-    // enrollment
     await pool.query(
-      `
-      INSERT INTO clu_enrollments(
+      `INSERT INTO clu_enrollments(
         student_id,
         session_id,
         professor,
@@ -156,8 +151,7 @@ app.post("/import", async (req, res) => {
         payment_notes,
         raw_data
       )
-      VALUES($1,$2,$3,$4,$5,$6,$7)
-      `,
+      VALUES($1,$2,$3,$4,$5,$6,$7)`,
       [
         studentId,
         sessionId,
