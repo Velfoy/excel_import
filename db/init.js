@@ -48,6 +48,13 @@ export async function initDB(pool) {
       created_at TIMESTAMP DEFAULT NOW()
     );
   `);
+  await pool.query(`
+  CREATE TABLE IF NOT EXISTS clu_raw_imports (
+    id SERIAL PRIMARY KEY,
+    data JSONB,
+    created_at TIMESTAMP DEFAULT NOW()
+  );
+`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS clu_enrollments (
