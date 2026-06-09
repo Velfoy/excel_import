@@ -5,18 +5,38 @@ import { initDB } from "./db/init.js";
 const app = express();
 app.use(express.json());
 
+// -------------------- DB --------------------
+
 const pool = new pg.Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
 });
 
-// init DB on deploy
-initDB(pool);
+// -------------------- STARTUP (FIXED) --------------------
 
-// -------------------- helpers --------------------
+async function start() {
+  try {
+    await initDB(pool);
+    console.log("DB initialized");
+
+    app.listen(process.env.PORT || 3000, () => {
+      console.log("Server running");
+    });
+  } catch (e) {
+    console.error("Startup error:", e);
+    process.exit(1);
+  }
+}
+
+start();
+
+// -------------------- HELPERS --------------------
 
 async function getCourse(name) {
+  if (!name) return null;
+
   let r = await pool.query("SELECT id FROM clu_courses WHERE name=$1", [name]);
+
   if (r.rows.length) return r.rows[0].id;
 
   let ins = await pool.query(
@@ -28,9 +48,12 @@ async function getCourse(name) {
 }
 
 async function getSlot(time) {
+  if (!time) return null;
+
   let r = await pool.query("SELECT id FROM clu_slots WHERE time_range=$1", [
     time,
   ]);
+
   if (r.rows.length) return r.rows[0].id;
 
   let ins = await pool.query(
@@ -42,7 +65,11 @@ async function getSlot(time) {
 }
 
 async function getStudent(row) {
-  let email = row["MAIL"];
+  const email = row["MAIL"];
+
+  if (!email) {
+    throw new Error("Missing MAIL field");
+  }
 
   let r = await pool.query("SELECT id FROM clu_students WHERE email=$1", [
     email,
@@ -63,28 +90,28 @@ async function getStudent(row) {
     RETURNING id
     `,
     [
-      row["APELLIDOS Y NOMBRE"],
-      row["MAIL"],
-      row["TEL CONTACTO"],
-      row["MOVIL"],
-      row["FECHA NACIMIENTO"],
-      row["CONTACTOS EMERGENCIAS"],
-      row["TEL CONTACTOS EMERGENCIAS"],
-      row["AUTORIZADOS RECOGIDA"],
-      row["¿AUTORIZADO IRSE A CASA SOLO?"],
-      row["¿AUTORIZA VIDEO?"],
-      row["¿CONTRATA SEGURO ESCOLAR?"],
-      row["¿TIENE HERMANOS?"],
-      row["¿PERTENECE AL AMPA?"],
-      row["¿ALERGICO A ALGO?/¿PADECE ALGUNA ENFERMEDAD IMPORTANTE?"],
-      row["¿SIGUE ALGUN REGIMEN DE COMIDAS?"],
+      row["APELLIDOS Y NOMBRE"] || null,
+      email,
+      row["TEL CONTACTO"] || null,
+      row["MOVIL"] || null,
+      row["FECHA NACIMIENTO"] || null,
+      row["CONTACTOS EMERGENCIAS"] || null,
+      row["TEL CONTACTOS EMERGENCIAS"] || null,
+      row["AUTORIZADOS RECOGIDA"] || null,
+      row["¿AUTORIZADO IRSE A CASA SOLO?"] || false,
+      row["¿AUTORIZA VIDEO?"] || false,
+      row["¿CONTRATA SEGURO ESCOLAR?"] || false,
+      row["¿TIENE HERMANOS?"] || false,
+      row["¿PERTENECE AL AMPA?"] || false,
+      row["¿ALERGICO A ALGO?/¿PADECE ALGUNA ENFERMEDAD IMPORTANTE?"] || null,
+      row["¿SIGUE ALGUN REGIMEN DE COMIDAS?"] || null,
     ],
   );
 
   return ins.rows[0].id;
 }
 
-// -------------------- import --------------------
+// -------------------- IMPORT ENDPOINT --------------------
 
 app.post("/import", async (req, res) => {
   const row = req.body;
@@ -94,24 +121,30 @@ app.post("/import", async (req, res) => {
     const courseId = await getCourse(row["ACTIVIDAD"]);
     const slotId = await getSlot(row["HORARIO"]);
 
-    const session = await pool.query(
+    // session
+    let sessionRes = await pool.query(
       `SELECT id FROM clu_sessions WHERE course_id=$1 AND slot_id=$2`,
       [courseId, slotId],
     );
 
     let sessionId;
 
-    if (session.rows.length) {
-      sessionId = session.rows[0].id;
+    if (sessionRes.rows.length) {
+      sessionId = sessionRes.rows[0].id;
     } else {
       let ins = await pool.query(
-        `INSERT INTO clu_sessions(course_id,slot_id,capacity)
-         VALUES($1,$2,$3) RETURNING id`,
+        `
+        INSERT INTO clu_sessions(course_id,slot_id,capacity)
+        VALUES($1,$2,$3)
+        RETURNING id
+        `,
         [courseId, slotId, 20],
       );
+
       sessionId = ins.rows[0].id;
     }
 
+    // enrollment
     await pool.query(
       `
       INSERT INTO clu_enrollments(
@@ -128,9 +161,9 @@ app.post("/import", async (req, res) => {
       [
         studentId,
         sessionId,
-        row["PROFESOR"],
-        row["FECHA INSCRIPCIÓN"],
-        row["OBSERVACIONES COBRO"],
+        row["PROFESOR"] || null,
+        row["FECHA INSCRIPCIÓN"] || null,
+        row["OBSERVACIONES COBRO"] || null,
         null,
         row,
       ],
@@ -138,9 +171,7 @@ app.post("/import", async (req, res) => {
 
     res.json({ ok: true });
   } catch (e) {
-    console.error(e);
+    console.error("IMPORT ERROR:", e);
     res.status(500).json({ error: e.message });
   }
 });
-
-app.listen(process.env.PORT || 3000);
