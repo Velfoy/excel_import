@@ -169,3 +169,21 @@ app.post("/import", async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+app.post("/import-batch", async (req, res) => {
+  try {
+    const rows = req.body.rows;
+
+    for (const row of rows) {
+      await pool.query(
+        `INSERT INTO clu_raw_imports(data)
+         VALUES($1)`,
+        [row],
+      );
+    }
+
+    res.json({ ok: true, count: rows.length });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
