@@ -170,20 +170,25 @@ app.post("/import", async (req, res) => {
   }
 });
 app.post("/import-batch", async (req, res) => {
-  try {
-    const rows = req.body.rows;
+  const rows = req.body.rows;
 
-    for (const row of rows) {
-      await pool.query(
-        `INSERT INTO clu_raw_imports(data)
-         VALUES($1)`,
-        [row],
-      );
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    for (const r of rows) {
+      await client.query(`INSERT INTO clu_raw_imports(data) VALUES($1)`, [r]);
     }
+
+    await client.query("COMMIT");
 
     res.json({ ok: true, count: rows.length });
   } catch (e) {
+    await client.query("ROLLBACK");
     console.error(e);
     res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
   }
 });
