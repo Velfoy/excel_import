@@ -49,9 +49,16 @@ app.post("/import", async (req, res) => {
       return res.status(400).json({ error: "Invalid row payload" });
     }
 
-    await pool.query(`INSERT INTO clu_raw_imports(data) VALUES($1)`, [row]);
-
-    res.json({ ok: true });
+    const client = await pool.connect();
+    try {
+      await client.query(
+        `INSERT INTO clu_raw_imports(data) VALUES($1::jsonb)`,
+        [row],
+      );
+      res.json({ ok: true });
+    } finally {
+      client.release();
+    }
   } catch (e) {
     console.error("IMPORT ERROR:", e);
     res.status(500).json({ error: e.message });
