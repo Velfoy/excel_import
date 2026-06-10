@@ -70,6 +70,10 @@ export async function initDB(pool) {
       created_at TIMESTAMP DEFAULT NOW()
     );
   `);
+  await pool.query(`
+  CREATE INDEX IF NOT EXISTS idx_raw_imports_sheet_name 
+  ON clu_raw_imports ((data->>'sheet_name'));
+`);
 
   console.log("DB initialized");
 }

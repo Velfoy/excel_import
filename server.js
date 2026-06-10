@@ -3,9 +3,11 @@ import pg from "pg";
 import { initDB } from "./db/init.js";
 
 const app = express();
-app.use(express.json({ limit: "10mb" })); // IMPORTANT for big Excel payloads
 
-// -------------------- HEALTH CHECK --------------------
+// IMPORTANT for Apps Script payloads
+app.use(express.json({ limit: "10mb" }));
+
+// -------------------- HEALTH --------------------
 
 app.get("/", (req, res) => {
   res.json({ status: "ok", service: "excel-import-api" });
@@ -18,7 +20,7 @@ const pool = new pg.Pool({
   ssl: { rejectUnauthorized: false },
 });
 
-// -------------------- STARTUP --------------------
+// -------------------- START --------------------
 
 async function start() {
   try {
@@ -39,7 +41,7 @@ async function start() {
 
 start();
 
-// -------------------- IMPORT (single row) --------------------
+// -------------------- SINGLE IMPORT --------------------
 
 app.post("/import", async (req, res) => {
   try {
@@ -50,22 +52,27 @@ app.post("/import", async (req, res) => {
     }
 
     const client = await pool.connect();
+
     try {
       await client.query(
         `INSERT INTO clu_raw_imports(data) VALUES($1::jsonb)`,
-        [row],
+        [JSON.stringify(row)],
       );
+
       res.json({ ok: true });
     } finally {
       client.release();
     }
   } catch (e) {
-    console.error("IMPORT ERROR:", e);
-    res.status(500).json({ error: e.message });
+    console.error("IMPORT ERROR FULL:", e);
+    res.status(500).json({
+      error: e.message,
+      stack: e.stack,
+    });
   }
 });
 
-// -------------------- IMPORT BATCH (SAFE VERSION) --------------------
+// -------------------- BATCH IMPORT (FIXED) --------------------
 
 app.post("/import-batch", async (req, res) => {
   try {
@@ -85,40 +92,46 @@ app.post("/import-batch", async (req, res) => {
     let failed = 0;
 
     try {
-      await client.query("BEGIN");
-
       for (const r of rows) {
         try {
-          if (!r || typeof r !== "object") continue;
+          if (!r || typeof r !== "object") {
+            failed++;
+            continue;
+          }
 
-          await client.query(`INSERT INTO clu_raw_imports(data) VALUES($1)`, [
-            r,
-          ]);
+          // SAFE JSON INSERT
+          await client.query(
+            `INSERT INTO clu_raw_imports(data) VALUES($1::jsonb)`,
+            [JSON.stringify(r)],
+          );
 
           inserted++;
         } catch (err) {
           failed++;
-          console.error("ROW INSERT ERROR:", err.message);
+
+          console.error("ROW INSERT ERROR FULL:", {
+            message: err.message,
+            code: err.code,
+            detail: err.detail,
+            row: r,
+          });
         }
       }
-
-      await client.query("COMMIT");
 
       res.json({
         ok: true,
         inserted,
         failed,
       });
-    } catch (e) {
-      await client.query("ROLLBACK");
-      throw e;
     } finally {
       client.release();
     }
   } catch (e) {
-    console.error("BATCH ERROR:", e);
+    console.error("BATCH ERROR FULL:", e);
+
     res.status(500).json({
       error: e.message,
+      stack: e.stack,
     });
   }
 });
