@@ -190,19 +190,39 @@ app.get("/students/by-email", async (req, res) => {
         s.full_name,
         s.email,
         s.phone,
+        s.mobile,
         s.birth_date,
+        s.emergency_contact,
+        s.emergency_phone,
+        s.pickup_authorized,
+        s.go_home_alone,
+        s.video_authorized,
+        s.insurance,
+        s.siblings,
+        s.ampa,
+        s.allergies,
+        s.diet,
+
         e.id AS enrollment_id,
         e.professor,
         e.registration_date,
         e.status,
+        e.observations,
+        e.payment_notes,
+        e.raw_data,
+
+        c.id AS course_id,
         c.name AS course_name,
+
         sl.time_range,
         sess.day
+
       FROM clu_students s
       JOIN clu_enrollments e ON e.student_id = s.id
       JOIN clu_sessions sess ON sess.id = e.session_id
       JOIN clu_courses c ON c.id = sess.course_id
       JOIN clu_slots sl ON sl.id = sess.slot_id
+
       WHERE LOWER(s.email) = LOWER($1)
       ORDER BY sess.day, sl.time_range
       `,
