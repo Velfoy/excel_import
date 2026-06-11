@@ -153,3 +153,53 @@ app.post("/import-batch", async (req, res) => {
     client.release();
   }
 });
+
+//--------------------Search--------------------
+app.get("/students/by-email", async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    const email = req.query.email?.trim();
+
+    if (!email) {
+      return res.status(400).json({ error: "email required" });
+    }
+
+    const result = await client.query(
+      `
+      SELECT
+        s.id AS student_id,
+        s.full_name,
+        s.email,
+        s.phone,
+        s.birth_date,
+
+        e.id AS enrollment_id,
+        e.professor,
+        e.registration_date,
+        e.status,
+
+        c.name AS course_name,
+        sl.time_range,
+        sess.day
+
+      FROM clu_students s
+      JOIN clu_enrollments e ON e.student_id = s.id
+      JOIN clu_sessions sess ON sess.id = e.session_id
+      JOIN clu_courses c ON c.id = sess.course_id
+      JOIN clu_slots sl ON sl.id = sess.slot_id
+
+      WHERE LOWER(s.email) = LOWER($1)
+      ORDER BY sess.day, sl.time_range
+      `,
+      [email],
+    );
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
+  }
+});

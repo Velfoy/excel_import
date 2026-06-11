@@ -1,0 +1,366 @@
+function importExcelProduction() {
+
+  Logger.log("=== IMPORT STARTED ===");
+
+  const FOLDER_ID = "1fQa3b7laGca490Y6tR49OXJb4amQ3Vn4";
+  const folder = DriveApp.getFolderById(FOLDER_ID);
+
+  const label =
+    GmailApp.getUserLabelByName("processed") ||
+    GmailApp.createLabel("processed");
+
+  const query =
+    '(from:(marsonyteam@gmail.com OR lera.zlydar@goodwavesolutions.com) subject:Overall has:attachment)';
+
+  const threads = GmailApp.search(query);
+
+  Logger.log("Threads found: " + threads.length);
+
+  threads.forEach(thread => {
+
+    try {
+
+      if (thread.getLabels().some(l => l.getName() === "processed")) {
+        Logger.log("Skipping processed thread");
+        return;
+      }
+
+      Logger.log("Processing thread: " + thread.getFirstMessageSubject());
+
+      thread.getMessages().forEach(message => {
+
+        message.getAttachments().forEach(file => {
+
+          try {
+
+            const fileName = file.getName();
+            Logger.log("Processing file: " + fileName);
+
+            const tempFile = folder.createFile(file);
+
+            const converted = Drive.Files.copy(
+              {
+                title: tempFile.getName(),
+                mimeType: MimeType.GOOGLE_SHEETS
+              },
+              tempFile.getId()
+            );
+
+            const tempSS = SpreadsheetApp.openById(converted.id);
+            const sheets = tempSS.getSheets();
+
+            Logger.log("Sheets found: " + sheets.length);
+
+            sheets.forEach(sheet => {
+
+              const values = sheet.getDataRange().getValues();
+
+              if (!values || values.length < 2) {
+                Logger.log("Skipping empty sheet: " + sheet.getName());
+                return;
+              }
+
+              Logger.log("Reading sheet: " + sheet.getName());
+
+              // ======================================================
+              // META = EXACTLY A1 / B1 / C1 (YOUR CORRECT MODEL)
+              // ======================================================
+              const meta = {
+                course_name: values[0]?.[0] || sheet.getName(),
+                time_range: values[0]?.[1] || null,
+                weekday: values[0]?.[2] || null,
+                sheet_source: sheet.getName()
+              };
+
+              Logger.log("META: " + JSON.stringify(meta));
+
+              // ======================================================
+              // HEADER DETECTION
+              // ======================================================
+              const headerRowIndex = values.findIndex(row =>
+                normalizeRow(row).includes("apellidos y nombre") &&
+                normalizeRow(row).includes("actividad")
+              );
+
+              if (headerRowIndex === -1) {
+                Logger.log("HEADER NOT FOUND: " + sheet.getName());
+                return;
+              }
+
+              const headers = values[headerRowIndex];
+
+              const map = {};
+              headers.forEach((h, i) => {
+                map[normalizeHeader(h)] = i;
+              });
+
+              let sheetBatch = [];
+
+              for (let i = headerRowIndex + 1; i < values.length; i++) {
+
+                const row = values[i];
+                if (!row) continue;
+
+                const email = extractEmail(row, map);
+                if (!email) continue;
+
+                sheetBatch.push({
+                  file_name: fileName,
+                  sheet_name: sheet.getName(),
+
+                  // 👇 THIS IS YOUR CORE STRUCTURE NOW
+                  meta,
+
+                  "APELLIDOS Y NOMBRE": getValue(row, map, FIELD_MAP.name),
+                  "ACTIVIDAD": getValue(row, map, FIELD_MAP.activity),
+                  "HORARIO": getValue(row, map, FIELD_MAP.time),
+                  "PROFESOR": getValue(row, map, FIELD_MAP.teacher),
+                  "FECHA INSCRIPCIÓN": getValue(row, map, FIELD_MAP.registration),
+                  "FECHA NACIMIENTO": getValue(row, map, FIELD_MAP.birth),
+                  "TEL CONTACTO": getValue(row, map, FIELD_MAP.phone),
+                  "MOVIL": getValue(row, map, FIELD_MAP.mobile),
+                  "MAIL": email,
+                  "CURSO": getValue(row, map, FIELD_MAP.course),
+                  "OBSERVACIONES COBRO": getValue(row, map, FIELD_MAP.notes),
+                  "CONTACTOS EMERGENCIAS": getValue(row, map, FIELD_MAP.emergency_name),
+                  "TEL CONTACTOS EMERGENCIAS": getValue(row, map, FIELD_MAP.emergency_phone),
+                  "AUTORIZADOS RECOGIDA": getValue(row, map, FIELD_MAP.pickup),
+                  "AUTORIZADO IRSE A CASA SOLO": getValue(row, map, FIELD_MAP.go_home),
+                  "AUTORIZA VIDEO": getValue(row, map, FIELD_MAP.video),
+                  "CONTRATA SEGURO ESCOLAR": getValue(row, map, FIELD_MAP.insurance),
+                  "TIENE HERMANOS": getValue(row, map, FIELD_MAP.siblings),
+                  "PERTENECE AL AMPA": getValue(row, map, FIELD_MAP.ampa),
+                  "ALERGIA_ENFERMEDAD": getValue(row, map, FIELD_MAP.allergies),
+                  "REGIMEN_COMIDAS": getValue(row, map, FIELD_MAP.diet)
+                });
+              }
+
+              Logger.log("Sheet " + sheet.getName() + " rows: " + sheetBatch.length);
+
+              // ======================================================
+              // SEND PER SHEET (CRITICAL FIX)
+              // ======================================================
+              if (sheetBatch.length > 0) {
+                sendBatchToRailway({
+                  meta,
+                  rows: sheetBatch
+                });
+
+                Logger.log("Sent sheet batch: " + sheet.getName());
+              }
+
+            });
+
+            DriveApp.getFileById(converted.id).setTrashed(true);
+
+          } catch (e) {
+            Logger.log("FILE ERROR: " + e.toString());
+          }
+
+        });
+
+      });
+
+      thread.addLabel(label);
+
+    } catch (e) {
+      Logger.log("THREAD ERROR: " + e.toString());
+    }
+
+  });
+
+  Logger.log("=== IMPORT FINISHED ===");
+}
+
+
+// ---------------- HELPERS ----------------
+
+function normalizeHeader(h) {
+  return String(h)
+    .toLowerCase()
+    .trim()
+    .replace(/[¿?¡!.,;]/g, "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ");
+}
+
+function normalizeRow(row) {
+  return row.map(c =>
+    String(c || "")
+      .toLowerCase()
+      .trim()
+      .replace(/[¿?]/g, "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+  );
+}
+
+function extractEmail(row, map) {
+  const keys = FIELD_MAP.email;
+
+  for (const key of keys) {
+    const idx = map[normalizeHeader(key)];
+    if (idx !== undefined && row[idx]) return row[idx];
+  }
+
+  for (const cell of row) {
+    if (typeof cell === "string" && cell.includes("@")) return cell;
+  }
+
+  return null;
+}
+
+function getValue(row, map, keys) {
+  for (const key of keys) {
+    const idx = map[normalizeHeader(key)];
+    if (idx !== undefined && row[idx] !== undefined) {
+      return row[idx];
+    }
+  }
+  return null;
+}
+
+
+// ---------------- FIELD MAP (BILINGUAL SAFE) ----------------
+
+const FIELD_MAP = {
+
+  email: [
+    "mail",
+    "email",
+    "correo",
+    "correo electronico",
+    "e mail"
+  ],
+
+  name: [
+    "apellidos y nombre",
+    "nombre",
+    "full name",
+    "student name"
+  ],
+
+  activity: [
+    "actividad",
+    "activity"
+  ],
+
+  time: [
+    "horario",
+    "schedule",
+    "time"
+  ],
+
+  teacher: [
+    "profesor",
+    "teacher",
+    "instructor"
+  ],
+
+  registration: [
+    "fecha inscripcion",
+    "registration date",
+    "enrollment date"
+  ],
+
+  birth: [
+    "fecha nacimiento",
+    "date of birth",
+    "dob"
+  ],
+
+  phone: [
+    "tel contacto",
+    "telefono",
+    "phone"
+  ],
+
+  mobile: [
+    "movil",
+    "mobile",
+    "cell phone"
+  ],
+
+  course: [
+    "curso",
+    "course"
+  ],
+
+  notes: [
+    "observaciones cobro",
+    "notes",
+    "payment notes"
+  ],
+
+  emergency_name: [
+    "contactos emergencias",
+    "emergency contact",
+    "emergency name"
+  ],
+
+  emergency_phone: [
+    "tel contactos emergencias",
+    "emergency phone"
+  ],
+
+  pickup: [
+    "autorizados recogida",
+    "pickup authorized"
+  ],
+
+  go_home: [
+    "autorizado irse a casa solo",
+    "go home alone"
+  ],
+
+  video: [
+    "autoriza video",
+    "video consent",
+    "media consent"
+  ],
+
+  insurance: [
+    "contrata seguro escolar",
+    "insurance"
+  ],
+
+  siblings: [
+    "tiene hermanos",
+    "siblings"
+  ],
+
+  ampa: [
+    "pertenece al ampa",
+    "ampa"
+  ],
+
+  allergies: [
+    "alergico a algo",
+    "alergia",
+    "allergies",
+    "medical condition"
+  ],
+
+  diet: [
+    "sigue algun regimen de comidas",
+    "diet",
+    "dietary requirements"
+  ]
+};
+
+// ---------------- SEND ----------------
+
+function sendBatchToRailway(payload) {
+
+  const url = "https://excelimport-production.up.railway.app/import-batch";
+
+  const res = UrlFetchApp.fetch(url, {
+    method: "post",
+    contentType: "application/json",
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  });
+
+  Logger.log("RESPONSE: " + res.getContentText());
+}
