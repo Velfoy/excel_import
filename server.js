@@ -190,30 +190,15 @@ app.get("/students/by-email", async (req, res) => {
         s.full_name,
         s.email,
         s.phone,
-        s.mobile,
         s.birth_date,
-        s.emergency_contact,
-        s.emergency_phone,
-        s.pickup_authorized,
-        s.go_home_alone,
-        s.video_authorized,
-        s.insurance,
-        s.siblings,
-        s.ampa,
-        s.allergies,
-        s.diet,
 
         e.id AS enrollment_id,
         e.professor,
         e.registration_date,
         e.status,
-        e.observations,
-        e.payment_notes,
         e.raw_data,
 
-        c.id AS course_id,
         c.name AS course_name,
-
         sl.time_range,
         sess.day
 
@@ -229,7 +214,42 @@ app.get("/students/by-email", async (req, res) => {
       [email],
     );
 
-    res.json(result.rows);
+    if (result.rowCount === 0) {
+      return res.json({
+        student: null,
+        enrollments: [],
+      });
+    }
+
+    const first = result.rows[0];
+
+    res.json({
+      student: {
+        id: first.student_id,
+        full_name: first.full_name,
+        email: first.email,
+        phone: first.phone,
+        birth_date: first.birth_date,
+      },
+
+      enrollments: result.rows.map((r) => ({
+        enrollment_id: r.enrollment_id,
+        status: r.status,
+        professor: r.professor,
+        registration_date: r.registration_date,
+
+        course: {
+          name: r.course_name,
+        },
+
+        session: {
+          day: r.day,
+          time_range: r.time_range,
+        },
+
+        raw_data: r.raw_data || null,
+      })),
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
