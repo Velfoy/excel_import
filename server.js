@@ -1,7 +1,18 @@
 import express from "express";
 import pg from "pg";
+import cors from "cors";
 import { initDB } from "./db/init.js";
 
+app.use(
+  cors({
+    origin: [
+      "http://localhost:3003",
+      "http://localhost:3000",
+      "http://127.0.0.1:3003",
+    ],
+    credentials: true,
+  }),
+);
 const app = express();
 app.use(express.json({ limit: "10mb" }));
 
