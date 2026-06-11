@@ -4,29 +4,45 @@ import cors from "cors";
 import { initDB } from "./db/init.js";
 
 const app = express();
-app.use(express.json({ limit: "10mb" }));
+
+/* -------------------- CORS (FIXED) -------------------- */
+const allowedOrigins = [
+  "http://localhost:3003",
+  "http://localhost:3000",
+  "http://127.0.0.1:3003",
+];
+
 app.use(
   cors({
-    origin: ["*"],
+    origin: function (origin, callback) {
+      // allow Postman / server-to-server
+      if (!origin) return callback(null, true);
+
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error("Not allowed by CORS"));
+    },
     credentials: true,
   }),
 );
 
-// -------------------- DB --------------------
+/* -------------------- BODY -------------------- */
+app.use(express.json({ limit: "10mb" }));
 
+/* -------------------- DB -------------------- */
 const pool = new pg.Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
 });
 
-// -------------------- HEALTH --------------------
-
+/* -------------------- HEALTH -------------------- */
 app.get("/", (req, res) => {
   res.json({ status: "ok", service: "excel-import-api" });
 });
 
-// -------------------- START --------------------
-
+/* -------------------- START -------------------- */
 async function start() {
   try {
     console.log("Starting server...");
@@ -44,8 +60,7 @@ async function start() {
 
 start();
 
-// -------------------- IMPORT BATCH (NEW LOGIC) --------------------
-
+/* -------------------- IMPORT BATCH -------------------- */
 app.post("/import-batch", async (req, res) => {
   const client = await pool.connect();
 
@@ -61,7 +76,6 @@ app.post("/import-batch", async (req, res) => {
     let students = 0;
     let enrollments = 0;
 
-    // ================= COURSE =================
     const courseRes = await client.query(
       `INSERT INTO clu_courses(name)
        VALUES ($1)
@@ -69,9 +83,9 @@ app.post("/import-batch", async (req, res) => {
        RETURNING id`,
       [meta.course_name],
     );
+
     const courseId = courseRes.rows[0].id;
 
-    // ================= SLOT =================
     const slotRes = await client.query(
       `INSERT INTO clu_slots(time_range)
        VALUES ($1)
@@ -79,9 +93,9 @@ app.post("/import-batch", async (req, res) => {
        RETURNING id`,
       [meta.time_range],
     );
+
     const slotId = slotRes.rows[0].id;
 
-    // ================= SESSION =================
     const sessionRes = await client.query(
       `INSERT INTO clu_sessions(course_id, slot_id, day)
        VALUES ($1,$2,$3)
@@ -90,16 +104,14 @@ app.post("/import-batch", async (req, res) => {
        RETURNING id`,
       [courseId, slotId, meta.weekday],
     );
-    const sessionId = sessionRes.rows[0].id;
 
-    // ================= ROWS =================
+    const sessionId = sessionRes.rows[0].id;
 
     for (const r of rows) {
       if (!r.MAIL) continue;
 
       const email = r.MAIL.toLowerCase().trim();
 
-      // STUDENT
       const s = await client.query(
         `INSERT INTO clu_students(full_name, email)
          VALUES ($1,$2)
@@ -111,7 +123,6 @@ app.post("/import-batch", async (req, res) => {
       const studentId = s.rows[0].id;
       students++;
 
-      // ENROLLMENT (NO DUPLICATES)
       const exists = await client.query(
         `SELECT id FROM clu_enrollments
          WHERE student_id=$1 AND session_id=$2`,
@@ -161,7 +172,7 @@ app.post("/import-batch", async (req, res) => {
   }
 });
 
-//--------------------Search--------------------
+/* -------------------- SEARCH -------------------- */
 app.get("/students/by-email", async (req, res) => {
   const client = await pool.connect();
 
@@ -180,22 +191,18 @@ app.get("/students/by-email", async (req, res) => {
         s.email,
         s.phone,
         s.birth_date,
-
         e.id AS enrollment_id,
         e.professor,
         e.registration_date,
         e.status,
-
         c.name AS course_name,
         sl.time_range,
         sess.day
-
       FROM clu_students s
       JOIN clu_enrollments e ON e.student_id = s.id
       JOIN clu_sessions sess ON sess.id = e.session_id
       JOIN clu_courses c ON c.id = sess.course_id
       JOIN clu_slots sl ON sl.id = sess.slot_id
-
       WHERE LOWER(s.email) = LOWER($1)
       ORDER BY sess.day, sl.time_range
       `,
